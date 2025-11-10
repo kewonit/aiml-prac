@@ -1,64 +1,136 @@
-"""Linear SVM on a tiny email dataset with oversampling.
-Features are made up counts (caps, links). I duplicate the minority spam rows before training.
-After training I print accuracy, precision, recall.
+"""Linear SVM with manual oversampling on the emails dataset.
+Loads the real word-count features, balances the train split by cloning the
+spam minority class, then optimises a linear SVM using hinge-loss updates.
 """
-import random
+from __future__ import annotations
 
-raw = [
-    ([1, 0], -1),
-    ([2, 0], -1),
-    ([0, 1], -1),
-    ([3, 0], -1),
-    ([4, 1], 1),
-    ([5, 2], 1),
-]
+from collections import Counter
+from pathlib import Path
+from typing import Iterable, List, Sequence, Tuple
 
-ham = [row for row in raw if row[1] == -1]
-spam = [row for row in raw if row[1] == 1]
+import numpy as np
+import pandas as pd
 
-oversampled = ham + spam + spam  # clone spam samples to balance a bit
-random.shuffle(oversampled)
+DATASET_PATH = Path("datasets/emails_16_17_18_19.csv")
 
 
-def train_svm(rows, steps=600, lr=0.01, reg=0.01):
-    weights = [0.0, 0.0]
+def load_email_dataset(path: Path) -> Tuple[np.ndarray, np.ndarray]:
+    df = pd.read_csv(path)
+    features = df.drop(columns=["Email No.", "Prediction"]).to_numpy(dtype=float)
+    labels = df["Prediction"].map({0: -1, 1: 1}).to_numpy(dtype=int)
+    return features, labels
+
+
+def split_train_test(
+    X: np.ndarray,
+    y: np.ndarray,
+    test_ratio: float = 0.2,
+    seed: int = 7,
+) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
+    rng = np.random.default_rng(seed)
+    indices = np.arange(len(X))
+    rng.shuffle(indices)
+    cut = int(len(indices) * (1 - test_ratio))
+    train_idx = indices[:cut]
+    test_idx = indices[cut:]
+    return (X[train_idx], y[train_idx]), (X[test_idx], y[test_idx])
+
+
+def standardise(train_X: np.ndarray, test_X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    mean = train_X.mean(axis=0)
+    std = train_X.std(axis=0)
+    std[std == 0] = 1.0
+    return (train_X - mean) / std, (test_X - mean) / std
+
+
+def oversample_minority(
+    X: np.ndarray, y: np.ndarray, seed: int = 7
+) -> Tuple[np.ndarray, np.ndarray]:
+    counts = Counter(y)
+    if len(counts) < 2:
+        return X, y
+    ((maj_label, maj_count), (min_label, min_count)) = sorted(
+        counts.items(), key=lambda item: item[1], reverse=True
+    )
+    if maj_count == min_count:
+        return X, y
+
+    rng = np.random.default_rng(seed)
+    minority_indices = np.where(y == min_label)[0]
+    extra_indices = rng.choice(minority_indices, size=maj_count - min_count, replace=True)
+    X_extra = X[extra_indices]
+    y_extra = y[extra_indices]
+    X_balanced = np.vstack((X, X_extra))
+    y_balanced = np.concatenate((y, y_extra))
+    shuffle_idx = rng.permutation(len(X_balanced))
+    return X_balanced[shuffle_idx], y_balanced[shuffle_idx]
+
+
+def train_svm(
+    rows: Sequence[Tuple[np.ndarray, float]],
+    steps: int = 35,
+    lr: float = 0.0008,
+    reg: float = 0.01,
+) -> Tuple[np.ndarray, float]:
+    feature_count = rows[0][0].shape[0]
+    weights = np.zeros(feature_count)
     bias = 0.0
+
+    rows_list: List[Tuple[np.ndarray, float]] = list(rows)
     for _ in range(steps):
-        for feats, label in rows:
-            margin = label * (weights[0] * feats[0] + weights[1] * feats[1] + bias)
+        np.random.shuffle(rows_list)
+        for feats, label in rows_list:
+            margin = label * (np.dot(weights, feats) + bias)
             if margin < 1:
-                weights[0] = weights[0] - lr * (reg * weights[0] - label * feats[0])
-                weights[1] = weights[1] - lr * (reg * weights[1] - label * feats[1])
-                bias = bias + lr * label
+                weights = (1 - lr * reg) * weights + lr * label * feats
+                bias += lr * label
             else:
-                weights[0] = weights[0] - lr * reg * weights[0]
-                weights[1] = weights[1] - lr * reg * weights[1]
+                weights = (1 - lr * reg) * weights
     return weights, bias
 
 
-def predict(weights, bias, feats):
-    score = weights[0] * feats[0] + weights[1] * feats[1] + bias
-    return 1 if score >= 0 else -1
+def predict(weights: np.ndarray, bias: float, feats: np.ndarray) -> int:
+    return 1 if np.dot(weights, feats) + bias >= 0 else -1
+
+
+def evaluate(
+    rows: Iterable[Tuple[np.ndarray, float]], weights: np.ndarray, bias: float
+) -> Tuple[float, float, float, float]:
+    tp = fp = tn = fn = 0
+    for feats, label in rows:
+        guess = predict(weights, bias, feats)
+        if guess == 1 and label == 1:
+            tp += 1
+        elif guess == 1 and label == -1:
+            fp += 1
+        elif guess == -1 and label == -1:
+            tn += 1
+        else:
+            fn += 1
+    total = tp + fp + tn + fn
+    accuracy = (tp + tn) / total if total else 0.0
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return accuracy, precision, recall, f1
 
 
 if __name__ == "__main__":
-    weights, bias = train_svm(oversampled)
-    TP = FP = TN = FN = 0
-    for feats, label in raw:
-        guess = predict(weights, bias, feats)
-        if guess == 1 and label == 1:
-            TP += 1
-        elif guess == 1 and label == -1:
-            FP += 1
-        elif guess == -1 and label == -1:
-            TN += 1
-        else:
-            FN += 1
-    accuracy = (TP + TN) / len(raw)
-    precision = TP / (TP + FP) if TP + FP else 0
-    recall = TP / (TP + FN) if TP + FN else 0
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0
-    print("Accuracy:", round(accuracy, 3))
-    print("Precision:", round(precision, 3))
-    print("Recall:", round(recall, 3))
+    X, y = load_email_dataset(DATASET_PATH)
+    (X_train, y_train), (X_test, y_test) = split_train_test(X, y)
+    X_train, X_test = standardise(X_train, X_test)
+    X_balanced, y_balanced = oversample_minority(X_train, y_train)
+
+    train_rows = [(feat, lbl) for feat, lbl in zip(X_balanced, y_balanced)]
+    test_rows = [(feat, lbl) for feat, lbl in zip(X_test, y_test)]
+
+    weights, bias = train_svm(train_rows)
+    acc, prec, rec, f1 = evaluate(test_rows, weights, bias)
+
+    print("Train class counts:", Counter(int(lbl) for lbl in y_train))
+    print("Balanced train counts:", Counter(int(lbl) for lbl in y_balanced))
+    print("Test class counts:", Counter(int(lbl) for lbl in y_test))
+    print("Accuracy:", round(acc, 3))
+    print("Precision:", round(prec, 3))
+    print("Recall:", round(rec, 3))
     print("F1:", round(f1, 3))
