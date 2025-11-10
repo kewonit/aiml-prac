@@ -1,96 +1,78 @@
-"""Multi feature student score regression with basic K-fold.
-I use hours, attendance and internal marks from the csv, average the fold MSE,
-and plot how the last fold predictions compare to reality.
-"""
-import csv
+from __future__ import annotations
+
+"""Student score regression via pandas + scikit-learn with K-fold."""
+
+from pathlib import Path
+
 import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import KFold
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
-FILE_PATH = "datasets/student_exam_scores_12_13.csv"
-
-
-def load_rows(limit=120):
-    rows = []
-    with open(FILE_PATH, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            feat = [
-                float(row["hours_studied"]),
-                float(row["attendance_percent"]),
-                float(row["Internal_marks"])
-            ]
-            target = float(row["exam_score"])
-            rows.append((feat, target))
-            if len(rows) >= limit:
-                break
-    return rows
+FILE_PATH = Path("datasets/student_exam_scores_12_13.csv")
 
 
-def gradient_descent(features, targets, steps=500, lr=0.0001):
-    weights = [0.0 for _ in range(len(features[0]) + 1)]
-    for _ in range(steps):
-        grad = [0.0 for _ in weights]
-        for row, y in zip(features, targets):
-            pred = weights[0]
-            for i, val in enumerate(row):
-                pred += weights[i + 1] * val
-            error = pred - y
-            grad[0] += error
-            for i, val in enumerate(row):
-                grad[i + 1] += error * val
-        m = len(features)
-        for i in range(len(weights)):
-            weights[i] -= lr * grad[i] / m
-    return weights
+FEATURES = [
+    "hours_studied",
+    "attendance_percent",
+    "Internal_marks",
+]
+TARGET = "exam_score"
 
 
-def predict(weights, row):
-    out = weights[0]
-    for i, val in enumerate(row):
-        out += weights[i + 1] * val
-    return out
+def load_dataset(limit: int | None = 150):
+    df = pd.read_csv(FILE_PATH)
+    df = df.dropna(subset=FEATURES + [TARGET])
+    if limit:
+        df = df.head(limit)
+    X = df[FEATURES]
+    y = df[TARGET].astype(float)
+    return X, y
 
 
-def mse(weights, features, targets):
-    return sum((predict(weights, row) - y) ** 2 for row, y in zip(features, targets)) / len(features)
+def build_model() -> Pipeline:
+    preprocessor = ColumnTransformer([
+        ("scale", StandardScaler(), FEATURES),
+    ])
+    return Pipeline([
+        ("prep", preprocessor),
+        ("reg", LinearRegression()),
+    ])
 
 
-def kfold(rows, k=5):
-    fold_size = len(rows) // k
+def run_kfold(X, y, folds: int = 5):
+    splitter = KFold(n_splits=folds, shuffle=True, random_state=21)
     scores = []
-    last = None
-    for i in range(k):
-        start = i * fold_size
-        end = start + fold_size
-        test = rows[start:end]
-        train = rows[:start] + rows[end:]
-        x_train = [r[0] for r in train]
-        y_train = [r[1] for r in train]
-        x_test = [r[0] for r in test]
-        y_test = [r[1] for r in test]
-        w = gradient_descent(x_train, y_train)
-        fold_score = mse(w, x_test, y_test)
-        scores.append(fold_score)
-        last = (w, x_test, y_test)
-    return sum(scores) / len(scores), last
+    final_snapshot = None
+    for train_idx, test_idx in splitter.split(X):
+        model = build_model()
+        model.fit(X.iloc[train_idx], y.iloc[train_idx])
+        preds = model.predict(X.iloc[test_idx])
+        scores.append(mean_squared_error(y.iloc[test_idx], preds))
+        final_snapshot = (y.iloc[test_idx], preds)
+    return sum(scores) / len(scores), final_snapshot
 
 
-def plot_preds(w, feats, targets):
-    preds = [predict(w, row) for row in feats]
+def plot_preds(actual, predicted):
     plt.figure(figsize=(6, 4))
-    plt.scatter(targets, preds, alpha=0.6, color="darkorange")
-    line_min = min(targets + preds)
-    line_max = max(targets + preds)
-    plt.plot([line_min, line_max], [line_min, line_max], linestyle="--", color="black")
-    plt.title("Student Score Predictions (Fold)")
-    plt.xlabel("Actual Score")
-    plt.ylabel("Predicted Score")
+    plt.scatter(actual, predicted, alpha=0.6, color="darkorange")
+    diag_min = min(actual.min(), predicted.min())
+    diag_max = max(actual.max(), predicted.max())
+    plt.plot([diag_min, diag_max], [diag_min, diag_max], linestyle="--", color="black")
+    plt.title("Student score predictions (last fold)")
+    plt.xlabel("Actual score")
+    plt.ylabel("Predicted score")
     plt.tight_layout()
     plt.show()
 
 
 if __name__ == "__main__":
-    data = load_rows()
-    mse_avg, final = kfold(data)
+    features, labels = load_dataset()
+    mse_avg, snapshot = run_kfold(features, labels)
     print("5 fold MSE:", round(mse_avg, 3))
-    if final:
-        plot_preds(final[0], final[1], final[2])
+    if snapshot:
+        plot_preds(snapshot[0], snapshot[1])

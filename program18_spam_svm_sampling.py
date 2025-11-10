@@ -10,6 +10,8 @@ from typing import Iterable, List, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
 DATASET_PATH = Path("datasets/emails_16_17_18_19.csv")
 
@@ -19,28 +21,6 @@ def load_email_dataset(path: Path) -> Tuple[np.ndarray, np.ndarray]:
     features = df.drop(columns=["Email No.", "Prediction"]).to_numpy(dtype=float)
     labels = df["Prediction"].map({0: -1, 1: 1}).to_numpy(dtype=int)
     return features, labels
-
-
-def split_train_test(
-    X: np.ndarray,
-    y: np.ndarray,
-    test_ratio: float = 0.2,
-    seed: int = 7,
-) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
-    rng = np.random.default_rng(seed)
-    indices = np.arange(len(X))
-    rng.shuffle(indices)
-    cut = int(len(indices) * (1 - test_ratio))
-    train_idx = indices[:cut]
-    test_idx = indices[cut:]
-    return (X[train_idx], y[train_idx]), (X[test_idx], y[test_idx])
-
-
-def standardise(train_X: np.ndarray, test_X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    mean = train_X.mean(axis=0)
-    std = train_X.std(axis=0)
-    std[std == 0] = 1.0
-    return (train_X - mean) / std, (test_X - mean) / std
 
 
 def oversample_minority(
@@ -117,8 +97,12 @@ def evaluate(
 
 if __name__ == "__main__":
     X, y = load_email_dataset(DATASET_PATH)
-    (X_train, y_train), (X_test, y_test) = split_train_test(X, y)
-    X_train, X_test = standardise(X_train, X_test)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=7)
+    
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
+    
     X_balanced, y_balanced = oversample_minority(X_train, y_train)
 
     train_rows = [(feat, lbl) for feat, lbl in zip(X_balanced, y_balanced)]

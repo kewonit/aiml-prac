@@ -1,22 +1,17 @@
 """Straight line fit using only study hours from the student score csv.
 Everything is manual: compute slope/intercept, show metrics, and draw the line.
 """
-import csv
 import matplotlib.pyplot as plt
+import pandas as pd
 
 FILE_PATH = "datasets/student_exam_scores_12_13.csv"
 
 
 def load_hours(limit=80):
-    hours = []
-    scores = []
-    with open(FILE_PATH, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            hours.append(float(row["hours_studied"]))
-            scores.append(float(row["exam_score"]))
-            if len(hours) >= limit:
-                break
+    df = pd.read_csv(FILE_PATH)
+    df = df.head(limit)
+    hours = df["hours_studied"].tolist()
+    scores = df["exam_score"].tolist()
     return hours, scores
 
 

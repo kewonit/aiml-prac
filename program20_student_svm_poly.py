@@ -1,25 +1,24 @@
 """Kernelized SVM-ish classifier for student pass/fail.
 I treat it like a perceptron with a polynomial kernel (degree 2) because coding SMO is pain.
 """
-import csv
+import pandas as pd
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 FILE_PATH = "datasets/student_performance_dataset_20.csv"
 
 
 def load_rows(limit=160):
+    df = pd.read_csv(FILE_PATH, encoding="utf-8")
+    df = df.head(limit)
     rows = []
-    with open(FILE_PATH, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            feats = [
-                float(row["Study_Hours_per_Week"]),
-                float(row["Attendance_Rate"]),
-                float(row["Internal_Scores"])
-            ]
-            label = 1 if row["Pass_Fail"].strip().lower() == "pass" else -1
-            rows.append((feats, label))
-            if len(rows) >= limit:
-                break
+    for _, row in df.iterrows():
+        feats = [
+            float(row["Study_Hours_per_Week"]),
+            float(row["Attendance_Rate"]),
+            float(row["Internal_Scores"])
+        ]
+        label = 1 if row["Pass_Fail"].strip().lower() == "pass" else -1
+        rows.append((feats, label))
     return rows
 
 
@@ -59,21 +58,14 @@ if __name__ == "__main__":
     test = data[split:split + 40]
     alphas = train_kernel_perceptron(train)
 
-    TP = FP = TN = FN = 0
-    for feats, label in test:
-        guess = predict(train, alphas, feats)
-        if guess == 1 and label == 1:
-            TP += 1
-        elif guess == 1 and label == -1:
-            FP += 1
-        elif guess == -1 and label == -1:
-            TN += 1
-        else:
-            FN += 1
-    accuracy = (TP + TN) / len(test) if test else 0
-    precision = TP / (TP + FP) if TP + FP else 0
-    recall = TP / (TP + FN) if TP + FN else 0
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0
+    y_true = [label for _, label in test]
+    y_pred = [predict(train, alphas, feats) for feats, _ in test]
+    
+    accuracy = accuracy_score(y_true, y_pred)
+    precision = precision_score(y_true, y_pred)
+    recall = recall_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred)
+    
     print("Accuracy:", round(accuracy, 3))
     print("Precision:", round(precision, 3))
     print("Recall:", round(recall, 3))

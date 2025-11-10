@@ -1,25 +1,24 @@
 """Polynomial kernel SVM-style classifier for breast cancer data.
 Training uses a kernel perceptron (degree 3) and evaluation reports confusion matrix and a few ROC points.
 """
-import csv
+import pandas as pd
+import matplotlib.pyplot as plt
 
 FILE_PATH = "datasets/Breast Cancer Wisconsin (Diagnostic)_21.csv"
 
 
 def load_rows(limit=220):
+    df = pd.read_csv(FILE_PATH, encoding="utf-8")
+    df = df.head(limit)
     rows = []
-    with open(FILE_PATH, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            feats = [
-                float(row["radius_mean"]),
-                float(row["texture_mean"]),
-                float(row["perimeter_mean"])
-            ]
-            label = 1 if row["diagnosis"].strip().upper() == "M" else -1
-            rows.append((feats, label))
-            if len(rows) >= limit:
-                break
+    for _, row in df.iterrows():
+        feats = [
+            float(row["radius_mean"]),
+            float(row["texture_mean"]),
+            float(row["perimeter_mean"])
+        ]
+        label = 1 if row["diagnosis"].strip().upper() == "M" else -1
+        rows.append((feats, label))
     return rows
 
 
@@ -110,5 +109,21 @@ if __name__ == "__main__":
     alphas = train_kernel_perceptron(train)
     cm, scores = confusion(test, train, alphas)
     print("Confusion matrix (TP, FP, TN, FN):", cm)
-    for t, tpr, fpr in roc_points(scores):
+    
+    roc_data = roc_points(scores)
+    print("\nROC Points:")
+    for t, tpr, fpr in roc_data:
         print("Threshold", t, "TPR", tpr, "FPR", fpr)
+    
+    plt.figure(figsize=(6, 5))
+    fprs = [fpr for _, _, fpr in roc_data]
+    tprs = [tpr for _, tpr, _ in roc_data]
+    plt.plot(fprs, tprs, marker='o', color='darkorange', label='ROC curve')
+    plt.plot([0, 1], [0, 1], linestyle='--', color='gray', label='Random')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curve - Breast Cancer SVM')
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()

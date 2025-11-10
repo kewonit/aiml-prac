@@ -1,96 +1,78 @@
-"""House price regressor with baby K-fold cross validation.
-I read a handful of rows from the csv, encode location crudely, run gradient descent, average scores,
-and plot how the last fold predictions hug the diagonal.
-"""
-import csv
+from __future__ import annotations
+
+"""House price regression with scikit-learn pipelines and shuffled K-fold."""
+
+from pathlib import Path
+
 import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import KFold
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-FILE_PATH = "datasets/House_Price_Dataset 11.csv"
-
-
-def grab_rows(limit=80):
-    rows = []
-    with open(FILE_PATH, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            area = float(row["Area"])
-            beds = float(row["Bedrooms"])
-            loc = row["Location"]
-            price = float(row["Price"])
-            loc_num = {"Rural": 0.0, "Suburban": 1.0, "Urban": 2.0}.get(loc, 1.0)
-            rows.append(([area, beds, loc_num], price))
-            if len(rows) >= limit:
-                break
-    return rows
+FILE_PATH = Path("datasets/House_Price_Dataset 11.csv")
 
 
-def gradient_descent(features, targets, steps=400, lr=0.00000001):
-    weights = [0.0 for _ in range(len(features[0]) + 1)]
-    for _ in range(steps):
-        grad = [0.0 for _ in weights]
-        for row, y in zip(features, targets):
-            pred = weights[0]
-            for i, val in enumerate(row):
-                pred += weights[i + 1] * val
-            error = pred - y
-            grad[0] += error
-            for i, val in enumerate(row):
-                grad[i + 1] += error * val
-        m = len(features)
-        for i in range(len(weights)):
-            weights[i] -= lr * grad[i] / m
-    return weights
+NUMERIC_FEATURES = ["Area", "Bedrooms"]
+CATEGORICAL_FEATURES = ["Location"]
 
 
-def predict(w, x):
-    out = w[0]
-    for i, val in enumerate(x):
-        out += w[i + 1] * val
-    return out
+def load_dataset(limit: int | None = 120):
+    df = pd.read_csv(FILE_PATH)
+    df = df.dropna(subset=NUMERIC_FEATURES + CATEGORICAL_FEATURES + ["Price"])
+    if limit:
+        df = df.head(limit)
+    X = df[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
+    y = df["Price"].astype(float)
+    return X, y
 
 
-def mse(weights, features, targets):
-    errors = [(predict(weights, row) - y) ** 2 for row, y in zip(features, targets)]
-    return sum(errors) / len(errors)
+def build_model() -> Pipeline:
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", StandardScaler(), NUMERIC_FEATURES),
+            ("cat", OneHotEncoder(handle_unknown="ignore"), CATEGORICAL_FEATURES),
+        ]
+    )
+    return Pipeline([
+        ("prep", preprocessor),
+        ("reg", LinearRegression()),
+    ])
 
 
-def kfold(rows, k=4):
-    fold_size = len(rows) // k
+def run_kfold(X, y, splits: int = 4):
+    kfold = KFold(n_splits=splits, shuffle=True, random_state=42)
     scores = []
-    last_bits = None
-    for i in range(k):
-        start = i * fold_size
-        end = start + fold_size
-        test = rows[start:end]
-        train = rows[:start] + rows[end:]
-        x_train = [r[0] for r in train]
-        y_train = [r[1] for r in train]
-        x_test = [r[0] for r in test]
-        y_test = [r[1] for r in test]
-        w = gradient_descent(x_train, y_train)
-        fold_score = mse(w, x_test, y_test)
-        scores.append(fold_score)
-        last_bits = (w, x_test, y_test)
-    return sum(scores) / len(scores), last_bits
+    final_plot = None
+    for train_idx, test_idx in kfold.split(X):
+        model = build_model()
+        model.fit(X.iloc[train_idx], y.iloc[train_idx])
+        preds = model.predict(X.iloc[test_idx])
+        score = mean_squared_error(y.iloc[test_idx], preds)
+        scores.append(score)
+        final_plot = (y.iloc[test_idx], preds)
+    return sum(scores) / len(scores), final_plot
 
 
-def plot_predictions(w, feats, labels):
-    preds = [predict(w, row) for row in feats]
+def plot_predictions(actual, predicted):
     plt.figure(figsize=(6, 4))
-    plt.scatter(labels, preds, alpha=0.5, color="seagreen")
-    line_min = min(labels + preds)
-    line_max = max(labels + preds)
-    plt.plot([line_min, line_max], [line_min, line_max], linestyle="--", color="black")
-    plt.title("House Price Fold Predictions")
-    plt.xlabel("Actual Price")
-    plt.ylabel("Predicted Price")
+    plt.scatter(actual, predicted, alpha=0.6, color="seagreen")
+    diag_min = min(actual.min(), predicted.min())
+    diag_max = max(actual.max(), predicted.max())
+    plt.plot([diag_min, diag_max], [diag_min, diag_max], linestyle="--", color="black")
+    plt.title("House price predictions (last fold)")
+    plt.xlabel("Actual price")
+    plt.ylabel("Predicted price")
     plt.tight_layout()
     plt.show()
 
 
 if __name__ == "__main__":
-    data = grab_rows()
-    score, final = kfold(data, k=4)
-    print("Average MSE over folds:", round(score, 2))
+    features, targets = load_dataset()
+    mse_avg, final = run_kfold(features, targets)
+    print("Average MSE over folds:", round(mse_avg, 2))
     if final:
-        plot_predictions(final[0], final[1], final[2])
+        plot_predictions(final[0], final[1])

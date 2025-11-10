@@ -1,94 +1,70 @@
-"""Sales forecast using ad spend csv.
-I grab a slice of the file, pull ad spend, discount and clicks to guess revenue with 5-fold CV,
-then plot how the final fold predictions stack against the truth.
-"""
-import csv
+from __future__ import annotations
+
+"""Sales revenue regression using pandas + scikit-learn cross-validation."""
+
+from pathlib import Path
+
 import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import KFold
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
-FILE_PATH = "datasets/15 ad spends.csv"
-
-
-def load_rows(limit=150):
-    rows = []
-    with open(FILE_PATH, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            spend = float(row["Ad_Spend"])
-            discount = float(row["Discount_Applied"])
-            footfall = float(row["Clicks"])
-            revenue = float(row["Revenue"])
-            rows.append(([spend, discount, footfall], revenue))
-            if len(rows) >= limit:
-                break
-    return rows
+FILE_PATH = Path("datasets/15 ad spends.csv")
 
 
-def gradient_descent(features, targets, steps=400, lr=0.00001):
-    weights = [0.0 for _ in range(len(features[0]) + 1)]
-    for _ in range(steps):
-        grad = [0.0 for _ in weights]
-        for row, y in zip(features, targets):
-            pred = weights[0]
-            for i, val in enumerate(row):
-                pred += weights[i + 1] * val
-            error = pred - y
-            grad[0] += error
-            for i, val in enumerate(row):
-                grad[i + 1] += error * val
-        m = len(features)
-        for i in range(len(weights)):
-            weights[i] -= lr * grad[i] / m
-    return weights
+FEATURES = ["Ad_Spend", "Discount_Applied", "Clicks"]
+TARGET = "Revenue"
 
 
-def predict(w, row):
-    out = w[0]
-    for i, val in enumerate(row):
-        out += w[i + 1] * val
-    return out
+def load_dataset(limit: int | None = 180):
+    df = pd.read_csv(FILE_PATH)
+    df = df.dropna(subset=FEATURES + [TARGET])
+    if limit:
+        df = df.head(limit)
+    X = df[FEATURES]
+    y = df[TARGET].astype(float)
+    return X, y
 
 
-def mse(weights, features, targets):
-    return sum((predict(weights, row) - y) ** 2 for row, y in zip(features, targets)) / len(features)
+def build_model() -> Pipeline:
+    return Pipeline([
+        ("scale", StandardScaler()),
+        ("reg", LinearRegression()),
+    ])
 
 
-def kfold(rows, k=5):
-    fold_size = len(rows) // k
+def run_kfold(X, y, folds: int = 5):
+    splitter = KFold(n_splits=folds, shuffle=True, random_state=33)
     scores = []
-    last = None
-    for i in range(k):
-        start = i * fold_size
-        end = start + fold_size
-        test = rows[start:end]
-        train = rows[:start] + rows[end:]
-        x_train = [r[0] for r in train]
-        y_train = [r[1] for r in train]
-        x_test = [r[0] for r in test]
-        y_test = [r[1] for r in test]
-        w = gradient_descent(x_train, y_train)
-        fold_score = mse(w, x_test, y_test)
-        scores.append(fold_score)
-        last = (w, x_test, y_test)
-    return sum(scores) / len(scores), last
+    final_snapshot = None
+    for train_idx, test_idx in splitter.split(X):
+        model = build_model()
+        model.fit(X.iloc[train_idx], y.iloc[train_idx])
+        preds = model.predict(X.iloc[test_idx])
+        scores.append(mean_squared_error(y.iloc[test_idx], preds))
+        final_snapshot = (y.iloc[test_idx], preds)
+    return sum(scores) / len(scores), final_snapshot
 
 
-def plot_preds(w, feats, labels):
-    preds = [predict(w, row) for row in feats]
+def plot_preds(actual, predicted):
     plt.figure(figsize=(6, 4))
-    plt.scatter(labels, preds, alpha=0.6, color="maroon")
-    line_min = min(labels + preds)
-    line_max = max(labels + preds)
-    plt.plot([line_min, line_max], [line_min, line_max], linestyle="--", color="black")
-    plt.title("Sales Revenue Predictions")
-    plt.xlabel("Actual Revenue")
-    plt.ylabel("Predicted Revenue")
+    plt.scatter(actual, predicted, alpha=0.6, color="maroon")
+    diag_min = min(actual.min(), predicted.min())
+    diag_max = max(actual.max(), predicted.max())
+    plt.plot([diag_min, diag_max], [diag_min, diag_max], linestyle="--", color="black")
+    plt.title("Sales revenue predictions (last fold)")
+    plt.xlabel("Actual revenue")
+    plt.ylabel("Predicted revenue")
     plt.tight_layout()
     plt.show()
 
 
 if __name__ == "__main__":
-    data = load_rows()
-    avg_mse, final = kfold(data)
+    features, targets = load_dataset()
+    avg_mse, final = run_kfold(features, targets)
     print("5 fold MSE:", round(avg_mse, 2))
     if final:
-        plot_preds(final[0], final[1], final[2])
+        plot_preds(final[0], final[1])

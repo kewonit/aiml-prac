@@ -1,113 +1,78 @@
-"""IT salary guesser trained on the provided spreadsheet (converted to csv).
-I keep it basic: experience, age, job, education and gender all become numeric.
-Then I run goofy gradient descent and plot how the predictions line up.
-"""
+from __future__ import annotations
 
-import csv
+"""IT salary regression using a tidy pandas + scikit-learn workflow."""
+
+from pathlib import Path
+
 import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import KFold
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-FILE_PATH = "datasets/salary_data_14_converted.csv"
-
-
-def encode(cache, key):
-    key = key.strip().lower()
-    if key not in cache:
-        cache[key] = float(len(cache))
-    return cache[key]
-
-
-def load_rows(limit=180):
-    rows = []
-    edu_map = {}
-    job_map = {}
-    gender_map = {}
-    with open(FILE_PATH, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            try:
-                age = float(row["Age"]) if row["Age"] else None
-                exp = float(row["Years of Experience"]) if row["Years of Experience"] else None
-                salary = float(row["Salary"]) if row["Salary"] else None
-            except ValueError:
-                continue
-            if age is None or exp is None or salary is None:
-                continue
-            edu = encode(edu_map, row.get("Education Level", "unknown"))
-            job = encode(job_map, row.get("Job Title", "other"))
-            gender = encode(gender_map, row.get("Gender", "missing"))
-            feat = [age, exp, edu, job, gender]
-            rows.append((feat, salary))
-            if len(rows) >= limit:
-                break
-    return rows
+FILE_PATH = Path("datasets/salary_data_14_converted.csv")
 
 
-def gradient_descent(features, targets, steps=650, lr=0.0000005):
-    weights = [0.0 for _ in range(len(features[0]) + 1)]
-    for _ in range(steps):
-        grad = [0.0 for _ in weights]
-        for row, y in zip(features, targets):
-            pred = weights[0]
-            for i, val in enumerate(row):
-                pred += weights[i + 1] * val
-            error = pred - y
-            grad[0] += error
-            for i, val in enumerate(row):
-                grad[i + 1] += error * val
-        m = len(features)
-        for i in range(len(weights)):
-            weights[i] -= lr * grad[i] / m
-    return weights
+NUMERIC_FEATURES = ["Age", "Years of Experience"]
+CATEGORICAL_FEATURES = ["Education Level", "Job Title", "Gender"]
+TARGET = "Salary"
 
 
-def predict(w, row):
-    ans = w[0]
-    for i, val in enumerate(row):
-        ans += w[i + 1] * val
-    return ans
+def load_dataset(limit: int | None = 200):
+    df = pd.read_csv(FILE_PATH)
+    df = df.dropna(subset=NUMERIC_FEATURES + CATEGORICAL_FEATURES + [TARGET])
+    if limit:
+        df = df.head(limit)
+    X = df[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
+    y = df[TARGET].astype(float)
+    return X, y
 
 
-def mse(weights, features, targets):
-    return sum((predict(weights, row) - y) ** 2 for row, y in zip(features, targets)) / len(features)
+def build_model() -> Pipeline:
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", StandardScaler(), NUMERIC_FEATURES),
+            ("cat", OneHotEncoder(handle_unknown="ignore"), CATEGORICAL_FEATURES),
+        ]
+    )
+    return Pipeline([
+        ("prep", preprocessor),
+        ("reg", LinearRegression()),
+    ])
 
 
-def kfold(k=5):
-    rows = load_rows()
-    fold_size = len(rows) // k
+def run_kfold(X, y, folds: int = 5):
+    splitter = KFold(n_splits=folds, shuffle=True, random_state=19)
     scores = []
-    last_fold = None
-    for i in range(k):
-        start = i * fold_size
-        end = start + fold_size
-        test = rows[start:end]
-        train = rows[:start] + rows[end:]
-        x_train = [r[0] for r in train]
-        y_train = [r[1] for r in train]
-        x_test = [r[0] for r in test]
-        y_test = [r[1] for r in test]
-        w = gradient_descent(x_train, y_train)
-        fold_score = mse(w, x_test, y_test)
-        scores.append(fold_score)
-        last_fold = (w, x_test, y_test)
-    return sum(scores) / len(scores), last_fold
+    final_snapshot = None
+    for train_idx, test_idx in splitter.split(X):
+        model = build_model()
+        model.fit(X.iloc[train_idx], y.iloc[train_idx])
+        preds = model.predict(X.iloc[test_idx])
+        scores.append(mean_squared_error(y.iloc[test_idx], preds))
+        final_snapshot = (y.iloc[test_idx], preds)
+    return sum(scores) / len(scores), final_snapshot
 
 
-def plot_predictions(w, feats, targets):
-    preds = [predict(w, row) for row in feats]
+def plot_predictions(actual, predicted):
     plt.figure(figsize=(6, 4))
-    plt.scatter(targets, preds, alpha=0.5, color="purple")
-    line_min = min(targets + preds)
-    line_max = max(targets + preds)
-    plt.plot([line_min, line_max], [line_min, line_max], color="black", linestyle="--")
-    plt.title("Predicted vs Actual Salary")
-    plt.xlabel("Actual")
-    plt.ylabel("Predicted")
+    plt.scatter(actual, predicted, alpha=0.55, color="purple")
+    diag_min = min(actual.min(), predicted.min())
+    diag_max = max(actual.max(), predicted.max())
+    plt.plot([diag_min, diag_max], [diag_min, diag_max], color="black", linestyle="--")
+    plt.title("Predicted vs actual salary")
+    plt.xlabel("Actual salary")
+    plt.ylabel("Predicted salary")
     plt.tight_layout()
     plt.show()
 
 
 if __name__ == "__main__":
-    avg_mse, final = kfold()
+    features, targets = load_dataset()
+    avg_mse, final = run_kfold(features, targets)
     print("5 fold MSE:", round(avg_mse, 2))
     if final:
-        plot_predictions(final[0], final[1], final[2])
+        plot_predictions(final[0], final[1])
