@@ -1,7 +1,8 @@
 """Straight line fit using only study hours from the student score csv.
-Everything is manual: compute slope/intercept, then spit out MSE and R2.
+Everything is manual: compute slope/intercept, show metrics, and draw the line.
 """
 import csv
+import matplotlib.pyplot as plt
 
 FILE_PATH = "datasets/student_exam_scores_12_13.csv"
 
@@ -56,3 +57,15 @@ if __name__ == "__main__":
     print("Intercept:", round(intercept, 4))
     print("MSE:", round(mse(preds, ys), 3))
     print("R2:", round(r2_score(preds, ys), 3))
+
+    plt.figure(figsize=(6, 4))
+    plt.scatter(xs, ys, color="royalblue", alpha=0.6, label="Actual scores")
+    xs_sorted = sorted(xs)
+    line_vals = [intercept + slope * x for x in xs_sorted]
+    plt.plot(xs_sorted, line_vals, color="red", label="Fitted line")
+    plt.title("Study Hours vs Exam Score")
+    plt.xlabel("Hours Studied")
+    plt.ylabel("Exam Score")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()

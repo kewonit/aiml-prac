@@ -1,7 +1,9 @@
 """House price regressor with baby K-fold cross validation.
-I read a handful of rows from the csv, encode location crudely, run gradient descent, and average fold scores.
+I read a handful of rows from the csv, encode location crudely, run gradient descent, average scores,
+and plot how the last fold predictions hug the diagonal.
 """
 import csv
+import matplotlib.pyplot as plt
 
 FILE_PATH = "datasets/House_Price_Dataset 11.csv"
 
@@ -55,6 +57,7 @@ def mse(weights, features, targets):
 def kfold(rows, k=4):
     fold_size = len(rows) // k
     scores = []
+    last_bits = None
     for i in range(k):
         start = i * fold_size
         end = start + fold_size
@@ -65,11 +68,29 @@ def kfold(rows, k=4):
         x_test = [r[0] for r in test]
         y_test = [r[1] for r in test]
         w = gradient_descent(x_train, y_train)
-        scores.append(mse(w, x_test, y_test))
-    return sum(scores) / len(scores)
+        fold_score = mse(w, x_test, y_test)
+        scores.append(fold_score)
+        last_bits = (w, x_test, y_test)
+    return sum(scores) / len(scores), last_bits
+
+
+def plot_predictions(w, feats, labels):
+    preds = [predict(w, row) for row in feats]
+    plt.figure(figsize=(6, 4))
+    plt.scatter(labels, preds, alpha=0.5, color="seagreen")
+    line_min = min(labels + preds)
+    line_max = max(labels + preds)
+    plt.plot([line_min, line_max], [line_min, line_max], linestyle="--", color="black")
+    plt.title("House Price Fold Predictions")
+    plt.xlabel("Actual Price")
+    plt.ylabel("Predicted Price")
+    plt.tight_layout()
+    plt.show()
 
 
 if __name__ == "__main__":
     data = grab_rows()
-    score = kfold(data, k=4)
+    score, final = kfold(data, k=4)
     print("Average MSE over folds:", round(score, 2))
+    if final:
+        plot_predictions(final[0], final[1], final[2])

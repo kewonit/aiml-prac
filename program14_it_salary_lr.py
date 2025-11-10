@@ -1,25 +1,48 @@
-"""Fake IT salary predictor using three quick features.
-Data is totally made up but shaped like experience, education tier, and skill score.
-I do 5-fold CV and print the mean squared error.
+"""IT salary guesser trained on the provided spreadsheet (converted to csv).
+I keep it basic: experience, age, job, education and gender all become numeric.
+Then I run goofy gradient descent and plot how the predictions line up.
 """
 
-data = [
-    {"years": 1, "education": 0, "skill": 4, "salary": 32000},
-    {"years": 3, "education": 1, "skill": 6, "salary": 45000},
-    {"years": 5, "education": 1, "skill": 7, "salary": 52000},
-    {"years": 2, "education": 0, "skill": 5, "salary": 36000},
-    {"years": 7, "education": 2, "skill": 8, "salary": 72000},
-    {"years": 4, "education": 1, "skill": 6, "salary": 48000},
-    {"years": 6, "education": 2, "skill": 9, "salary": 68000},
-    {"years": 8, "education": 2, "skill": 9, "salary": 78000},
-    {"years": 10, "education": 2, "skill": 10, "salary": 88000},
-    {"years": 3, "education": 0, "skill": 5, "salary": 41000},
-    {"years": 9, "education": 2, "skill": 9, "salary": 82000},
-    {"years": 1, "education": 0, "skill": 3, "salary": 30000}
-]
+import csv
+import matplotlib.pyplot as plt
+
+FILE_PATH = "datasets/salary_data_14_converted.csv"
 
 
-def gradient_descent(features, targets, steps=600, lr=0.00001):
+def encode(cache, key):
+    key = key.strip().lower()
+    if key not in cache:
+        cache[key] = float(len(cache))
+    return cache[key]
+
+
+def load_rows(limit=180):
+    rows = []
+    edu_map = {}
+    job_map = {}
+    gender_map = {}
+    with open(FILE_PATH, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                age = float(row["Age"]) if row["Age"] else None
+                exp = float(row["Years of Experience"]) if row["Years of Experience"] else None
+                salary = float(row["Salary"]) if row["Salary"] else None
+            except ValueError:
+                continue
+            if age is None or exp is None or salary is None:
+                continue
+            edu = encode(edu_map, row.get("Education Level", "unknown"))
+            job = encode(job_map, row.get("Job Title", "other"))
+            gender = encode(gender_map, row.get("Gender", "missing"))
+            feat = [age, exp, edu, job, gender]
+            rows.append((feat, salary))
+            if len(rows) >= limit:
+                break
+    return rows
+
+
+def gradient_descent(features, targets, steps=650, lr=0.0000005):
     weights = [0.0 for _ in range(len(features[0]) + 1)]
     for _ in range(steps):
         grad = [0.0 for _ in weights]
@@ -49,9 +72,10 @@ def mse(weights, features, targets):
 
 
 def kfold(k=5):
-    rows = [([item["years"], item["education"], item["skill"]], item["salary"]) for item in data]
+    rows = load_rows()
     fold_size = len(rows) // k
     scores = []
+    last_fold = None
     for i in range(k):
         start = i * fold_size
         end = start + fold_size
@@ -62,9 +86,28 @@ def kfold(k=5):
         x_test = [r[0] for r in test]
         y_test = [r[1] for r in test]
         w = gradient_descent(x_train, y_train)
-        scores.append(mse(w, x_test, y_test))
-    return sum(scores) / len(scores)
+        fold_score = mse(w, x_test, y_test)
+        scores.append(fold_score)
+        last_fold = (w, x_test, y_test)
+    return sum(scores) / len(scores), last_fold
+
+
+def plot_predictions(w, feats, targets):
+    preds = [predict(w, row) for row in feats]
+    plt.figure(figsize=(6, 4))
+    plt.scatter(targets, preds, alpha=0.5, color="purple")
+    line_min = min(targets + preds)
+    line_max = max(targets + preds)
+    plt.plot([line_min, line_max], [line_min, line_max], color="black", linestyle="--")
+    plt.title("Predicted vs Actual Salary")
+    plt.xlabel("Actual")
+    plt.ylabel("Predicted")
+    plt.tight_layout()
+    plt.show()
 
 
 if __name__ == "__main__":
-    print("5 fold MSE:", round(kfold(), 2))
+    avg_mse, final = kfold()
+    print("5 fold MSE:", round(avg_mse, 2))
+    if final:
+        plot_predictions(final[0], final[1], final[2])

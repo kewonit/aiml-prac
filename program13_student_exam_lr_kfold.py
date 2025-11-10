@@ -1,7 +1,9 @@
 """Multi feature student score regression with basic K-fold.
-I use hours, attendance and internal marks from the csv and average the fold MSE.
+I use hours, attendance and internal marks from the csv, average the fold MSE,
+and plot how the last fold predictions compare to reality.
 """
 import csv
+import matplotlib.pyplot as plt
 
 FILE_PATH = "datasets/student_exam_scores_12_13.csv"
 
@@ -55,6 +57,7 @@ def mse(weights, features, targets):
 def kfold(rows, k=5):
     fold_size = len(rows) // k
     scores = []
+    last = None
     for i in range(k):
         start = i * fold_size
         end = start + fold_size
@@ -65,10 +68,29 @@ def kfold(rows, k=5):
         x_test = [r[0] for r in test]
         y_test = [r[1] for r in test]
         w = gradient_descent(x_train, y_train)
-        scores.append(mse(w, x_test, y_test))
-    return sum(scores) / len(scores)
+        fold_score = mse(w, x_test, y_test)
+        scores.append(fold_score)
+        last = (w, x_test, y_test)
+    return sum(scores) / len(scores), last
+
+
+def plot_preds(w, feats, targets):
+    preds = [predict(w, row) for row in feats]
+    plt.figure(figsize=(6, 4))
+    plt.scatter(targets, preds, alpha=0.6, color="darkorange")
+    line_min = min(targets + preds)
+    line_max = max(targets + preds)
+    plt.plot([line_min, line_max], [line_min, line_max], linestyle="--", color="black")
+    plt.title("Student Score Predictions (Fold)")
+    plt.xlabel("Actual Score")
+    plt.ylabel("Predicted Score")
+    plt.tight_layout()
+    plt.show()
 
 
 if __name__ == "__main__":
     data = load_rows()
-    print("5 fold MSE:", round(kfold(data), 3))
+    mse_avg, final = kfold(data)
+    print("5 fold MSE:", round(mse_avg, 3))
+    if final:
+        plot_preds(final[0], final[1], final[2])
