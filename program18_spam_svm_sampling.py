@@ -1,136 +1,137 @@
-"""Linear SVM with manual oversampling on the emails dataset.
-Loads the real word-count features, balances the train split by cloning the
-spam minority class, then optimises a linear SVM using hinge-loss updates.
 """
-from __future__ import annotations
-
-from collections import Counter
+email spam detector using svm with oversampling to handle class imbalance.
+maps emails as normal (not spam) or abnormal (spam) and shows performance metrics.
+"""
 from pathlib import Path
-from typing import Iterable, List, Sequence, Tuple
-
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from collections import Counter
+
 
 DATASET_PATH = Path("datasets/emails_16_17_18_19.csv")
 
 
-def load_email_dataset(path: Path) -> Tuple[np.ndarray, np.ndarray]:
+# load the email dataset and convert labels to -1 (spam) and 1 (normal)
+def load_emails(path):
     df = pd.read_csv(path)
     features = df.drop(columns=["Email No.", "Prediction"]).to_numpy(dtype=float)
     labels = df["Prediction"].map({0: -1, 1: 1}).to_numpy(dtype=int)
     return features, labels
 
 
-def split_train_test(
-    X: np.ndarray,
-    y: np.ndarray,
-    test_ratio: float = 0.2,
-    seed: int = 7,
-) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
-    rng = np.random.default_rng(seed)
-    indices = np.arange(len(X))
-    rng.shuffle(indices)
-    cut = int(len(indices) * (1 - test_ratio))
-    train_idx = indices[:cut]
-    test_idx = indices[cut:]
-    return (X[train_idx], y[train_idx]), (X[test_idx], y[test_idx])
-
-
-def standardise(train_X: np.ndarray, test_X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    mean = train_X.mean(axis=0)
-    std = train_X.std(axis=0)
-    std[std == 0] = 1.0
-    return (train_X - mean) / std, (test_X - mean) / std
-
-
-def oversample_minority(
-    X: np.ndarray, y: np.ndarray, seed: int = 7
-) -> Tuple[np.ndarray, np.ndarray]:
-    counts = Counter(y)
-    if len(counts) < 2:
-        return X, y
-    ((maj_label, maj_count), (min_label, min_count)) = sorted(
-        counts.items(), key=lambda item: item[1], reverse=True
+# basically just copy-pasting the minority class until it matches the majority
+def oversample_minority_class(email_features, email_labels, seed=7):
+    label_counts = Counter(email_labels)
+    if len(label_counts) < 2:
+        return email_features, email_labels
+    
+    (majority_label, majority_count), (minority_label, minority_count) = sorted(
+        label_counts.items(), key=lambda x: x[1], reverse=True
     )
-    if maj_count == min_count:
-        return X, y
+    if majority_count == minority_count:
+        return email_features, email_labels
+    
+    # grab all the minority class examples and duplicate them randomly
+    minority_mask = np.where(email_labels == minority_label)[0]
+    np.random.seed(seed)
+    duplicated_indices = np.random.choice(minority_mask, size=majority_count - minority_count, replace=True)
+    
+    extra_features = email_features[duplicated_indices]
+    extra_labels = email_labels[duplicated_indices]
+    
+    balanced_features = np.vstack((email_features, extra_features))
+    balanced_labels = np.concatenate((email_labels, extra_labels))
+    
+    shuffle_order = np.random.permutation(len(balanced_features))
+    return balanced_features[shuffle_order], balanced_labels[shuffle_order]
 
-    rng = np.random.default_rng(seed)
-    minority_indices = np.where(y == min_label)[0]
-    extra_indices = rng.choice(minority_indices, size=maj_count - min_count, replace=True)
-    X_extra = X[extra_indices]
-    y_extra = y[extra_indices]
-    X_balanced = np.vstack((X, X_extra))
-    y_balanced = np.concatenate((y, y_extra))
-    shuffle_idx = rng.permutation(len(X_balanced))
-    return X_balanced[shuffle_idx], y_balanced[shuffle_idx]
 
-
-def train_svm(
-    rows: Sequence[Tuple[np.ndarray, float]],
-    steps: int = 35,
-    lr: float = 0.0008,
-    reg: float = 0.01,
-) -> Tuple[np.ndarray, float]:
-    feature_count = rows[0][0].shape[0]
-    weights = np.zeros(feature_count)
-    bias = 0.0
-
-    rows_list: List[Tuple[np.ndarray, float]] = list(rows)
-    for _ in range(steps):
-        np.random.shuffle(rows_list)
-        for feats, label in rows_list:
-            margin = label * (np.dot(weights, feats) + bias)
-            if margin < 1:
-                weights = (1 - lr * reg) * weights + lr * label * feats
-                bias += lr * label
+# the actual svm training using hinge loss. weights learn by seeing if margin < 1
+def train_svm_classifier(training_data, epochs=35, learning_rate=0.0008, regularization=0.01):
+    # initialize weights and bias to zero
+    num_features = training_data[0][0].shape[0]
+    svm_weights = np.zeros(num_features)
+    svm_bias = 0.0
+    
+    for epoch in range(epochs):
+        np.random.shuffle(training_data)
+        for email_vector, true_label in training_data:
+            # check how far we are from the decision boundary
+            decision_score = true_label * (np.dot(svm_weights, email_vector) + svm_bias)
+            
+            # if we're not confident enough, update weights using hinge loss
+            if decision_score < 1:
+                svm_weights = (1 - learning_rate * regularization) * svm_weights + learning_rate * true_label * email_vector
+                svm_bias += learning_rate * true_label
             else:
-                weights = (1 - lr * reg) * weights
-    return weights, bias
+                # just apply regularization to reduce magnitude
+                svm_weights = (1 - learning_rate * regularization) * svm_weights
+    
+    return svm_weights, svm_bias
 
 
-def predict(weights: np.ndarray, bias: float, feats: np.ndarray) -> int:
-    return 1 if np.dot(weights, feats) + bias >= 0 else -1
+# predict if email is spam (-1) or normal (1)
+def predict_spam(svm_weights, svm_bias, email_vector):
+    return 1 if np.dot(svm_weights, email_vector) + svm_bias >= 0 else -1
 
 
-def evaluate(
-    rows: Iterable[Tuple[np.ndarray, float]], weights: np.ndarray, bias: float
-) -> Tuple[float, float, float, float]:
+# calculate accuracy, precision, recall, and f1 score
+def evaluate_model(test_data, svm_weights, svm_bias):
     tp = fp = tn = fn = 0
-    for feats, label in rows:
-        guess = predict(weights, bias, feats)
-        if guess == 1 and label == 1:
+    for email_vector, true_label in test_data:
+        prediction = predict_spam(svm_weights, svm_bias, email_vector)
+        if prediction == 1 and true_label == 1:
             tp += 1
-        elif guess == 1 and label == -1:
+        elif prediction == 1 and true_label == -1:
             fp += 1
-        elif guess == -1 and label == -1:
+        elif prediction == -1 and true_label == -1:
             tn += 1
         else:
             fn += 1
+    
     total = tp + fp + tn + fn
     accuracy = (tp + tn) / total if total else 0.0
     precision = tp / (tp + fp) if tp + fp else 0.0
     recall = tp / (tp + fn) if tp + fn else 0.0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    
     return accuracy, precision, recall, f1
 
 
 if __name__ == "__main__":
-    X, y = load_email_dataset(DATASET_PATH)
-    (X_train, y_train), (X_test, y_test) = split_train_test(X, y)
-    X_train, X_test = standardise(X_train, X_test)
-    X_balanced, y_balanced = oversample_minority(X_train, y_train)
-
-    train_rows = [(feat, lbl) for feat, lbl in zip(X_balanced, y_balanced)]
-    test_rows = [(feat, lbl) for feat, lbl in zip(X_test, y_test)]
-
-    weights, bias = train_svm(train_rows)
-    acc, prec, rec, f1 = evaluate(test_rows, weights, bias)
-
-    print("Train class counts:", Counter(int(lbl) for lbl in y_train))
-    print("Balanced train counts:", Counter(int(lbl) for lbl in y_balanced))
-    print("Test class counts:", Counter(int(lbl) for lbl in y_test))
-    print("Accuracy:", round(acc, 3))
-    print("Precision:", round(prec, 3))
-    print("Recall:", round(rec, 3))
-    print("F1:", round(f1, 3))
+    # load dataset
+    X_all, y_all = load_emails(DATASET_PATH)
+    
+    # split into train and test
+    X_train, X_test, y_train, y_test = train_test_split(X_all, y_all, test_size=0.2, random_state=7)
+    
+    # normalize the data so all features have same scale
+    scaler = StandardScaler()
+    X_train_normalized = scaler.fit_transform(X_train)
+    X_test_normalized = scaler.transform(X_test)
+    
+    # handle class imbalance by oversampling spam emails
+    X_balanced, y_balanced = oversample_minority_class(X_train_normalized, y_train)
+    
+    # convert to list of tuples for training
+    training_set = [(feat, lbl) for feat, lbl in zip(X_balanced, y_balanced)]
+    test_set = [(feat, lbl) for feat, lbl in zip(X_test_normalized, y_test)]
+    
+    # train the svm
+    learned_weights, learned_bias = train_svm_classifier(training_set)
+    
+    # evaluate on test set
+    acc, prec, rec, f1_score = evaluate_model(test_set, learned_weights, learned_bias)
+    
+    # show results
+    print("\n--- spam detection results ---")
+    print(f"original train distribution: {dict(Counter(y_train))}")
+    print(f"after oversampling: {dict(Counter(y_balanced))}")
+    print(f"\ntest distribution: {dict(Counter(y_test))}")
+    print(f"\nmodel performance:")
+    print(f"  accuracy:  {acc:.3f}")
+    print(f"  precision: {prec:.3f}")
+    print(f"  recall:    {rec:.3f}")
+    print(f"  f1 score:  {f1_score:.3f}")

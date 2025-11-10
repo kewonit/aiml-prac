@@ -1,44 +1,68 @@
-"""A tiny tic tac toe simulation.
-I hard-code a list of moves for X and O so we see a complete playthrough without typing.
-Just shows win detection and board printing.
+"""implementation of tic-tac-toe game.
+simulates a complete game with predefined moves for both players.
+detects wins, ties, and displays the board state.
 """
 
-board = [" "] * 9
+# the 3x3 board represented as a list of 9 positions (indexes 0-8)
+game_board = [" "] * 9
 
-win_lines = [
-    (0, 1, 2), (3, 4, 5), (6, 7, 8),
-    (0, 3, 6), (1, 4, 7), (2, 5, 8),
-    (0, 4, 8), (2, 4, 6)
+# all possible winning combinations (3 in a row, column, or diagonal)
+winning_combinations = [
+    (0, 1, 2), (3, 4, 5), (6, 7, 8),  # rows
+    (0, 3, 6), (1, 4, 7), (2, 5, 8),  # columns
+    (0, 4, 8), (2, 4, 6)               # diagonals
 ]
 
 
-def print_board():
-    print(f"{board[0]}|{board[1]}|{board[2]}")
+def display_game_board():
+    """renders the current board state in a nice 3x3 grid format"""
+    print(f"{game_board[0]}|{game_board[1]}|{game_board[2]}")
     print("-+-+-")
-    print(f"{board[3]}|{board[4]}|{board[5]}")
+    print(f"{game_board[3]}|{game_board[4]}|{game_board[5]}")
     print("-+-+-")
-    print(f"{board[6]}|{board[7]}|{board[8]}")
+    print(f"{game_board[6]}|{game_board[7]}|{game_board[8]}")
 
 
-def winner():
-    for a, b, c in win_lines:
-        if board[a] != " " and board[a] == board[b] == board[c]:
-            return board[a]
-    if " " not in board:
+def check_game_winner():
+    """checks if someone won or if it's a tie. returns the winner symbol, 'tie', or none"""
+    # loop through all winning combinations
+    for pos1, pos2, pos3 in winning_combinations:
+        # if all three positions match and aren't empty, we got a winner
+        if game_board[pos1] != " " and game_board[pos1] == game_board[pos2] == game_board[pos3]:
+            return game_board[pos1]
+    
+    # if board is full with no winner, it's a tie
+    if " " not in game_board:
         return "Tie"
+    
+    # game still ongoing
     return None
 
 
-if __name__ == "__main__":
-    scripted_moves = [0, 3, 1, 4, 2]
-    symbols = ["X", "O"]
-    turn = 0
-    for move in scripted_moves:
-        board[move] = symbols[turn]
-        print_board()
-        champ = winner()
-        if champ:
-            print("Result:", champ)
+def play_game(predefined_moves):
+    """plays out the game with predefined moves and checks win conditions after each move"""
+    player_symbols = ["X", "O"]
+    current_player_turn = 0
+    
+    for move_position in predefined_moves:
+        # place the current player's symbol at the given position
+        game_board[move_position] = player_symbols[current_player_turn]
+        
+        # show the board after this move
+        display_game_board()
+        
+        # check if game is over
+        game_result = check_game_winner()
+        if game_result:
+            print(f"game result: {game_result}")
             break
-        print()
-        turn = 1 - turn
+        
+        print()  # blank line between moves for readability
+        # switch to the other player
+        current_player_turn = 1 - current_player_turn
+
+
+if __name__ == "__main__":
+    # sequence of moves (position indexes) for a complete game
+    moves_sequence = [0, 3, 1, 4, 2]
+    play_game(moves_sequence)

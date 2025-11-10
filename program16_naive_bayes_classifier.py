@@ -1,115 +1,136 @@
-"""Multinomial naive bayes that actually touches the giant email csv.
-I cherry pick a few columns (free, money, etc.), learn simple counts with Laplace,
-measure the metrics, and plot the confusion matrix as bars.
+"""
+email spam detection using multinomial naive bayes.
+trains on word frequencies, predicts spam vs legit, then shows metrics.
 """
 
 import csv
 import math
+import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
 
-FILE_PATH = "datasets/emails_16_17_18_19.csv"
-WORDS = ["free", "money", "enron", "viagra", "credit", "project", "meeting", "cash", "offer", "prize"]
+DATASET = "datasets/emails_16_17_18_19.csv"
+# email words that hint if something's spam
+FEATURES = ["free", "money", "credit", "cash", "prize"]
 
 
-def load_rows(limit=400):
-    feats = []
-    labels = []
-    with open(FILE_PATH, newline="") as f:
+def load_email_data(max_rows=500):
+    # grab email features and labels from csv
+    X, y = [], []
+    with open(DATASET) as f:
         reader = csv.DictReader(f)
         for row in reader:
             label = row.get("Prediction")
             if label not in {"0", "1"}:
                 continue
-            vector = []
-            ok = True
-            for word in WORDS:
-                try:
-                    vector.append(float(row.get(word, 0)))
-                except ValueError:
-                    ok = False
+            try:
+                # extract word frequencies for each feature
+                features_vec = [float(row.get(word, 0)) for word in FEATURES]
+                X.append(features_vec)
+                y.append(int(label))
+                if len(X) >= max_rows:
                     break
-            if not ok:
+            except ValueError:
                 continue
-            feats.append(vector)
-            labels.append(int(label))
-            if len(feats) >= limit:
-                break
-    return feats, labels
+    return np.array(X), np.array(y)
 
 
-def split_train_test(features, labels, ratio=0.7):
-    cut = int(len(features) * ratio)
-    return (features[:cut], labels[:cut]), (features[cut:], labels[cut:])
+def split_data(X, y, train_ratio=0.7):
+    # split into train/test sets
+    idx = int(len(X) * train_ratio)
+    return (X[:idx], y[:idx]), (X[idx:], y[idx:])
 
 
-def train_nb(features, labels):
-    priors = {}
-    counts = {}
-    totals = {}
-    for label in set(labels):
-        priors[label] = labels.count(label) / len(labels)
-        counts[label] = [1.0 for _ in WORDS]
-        totals[label] = float(len(WORDS))
-    for vec, lab in zip(features, labels):
-        for i, val in enumerate(vec):
-            counts[lab][i] += val
-            totals[lab] += val
-    return priors, counts, totals
+def train_naive_bayes(X_train, y_train):
+    # calculate class priors: P(spam) and P(not spam)
+    class_priors = {}
+    word_counts = {}
+    word_totals = {}
+    
+    # initialize laplace smoothing: add 1 to avoid log(0)
+    for cls in np.unique(y_train):
+        class_priors[cls] = np.sum(y_train == cls) / len(y_train)
+        word_counts[cls] = np.ones(len(FEATURES))
+        word_totals[cls] = float(len(FEATURES))
+    
+    # count word occurrences per class
+    for feature_vec, label in zip(X_train, y_train):
+        for i, freq in enumerate(feature_vec):
+            word_counts[label][i] += freq
+            word_totals[label] += freq
+    
+    return class_priors, word_counts, word_totals
 
 
-def predict_nb(vec, priors, counts, totals):
+def predict_spam(feature_vec, class_priors, word_counts, word_totals):
+    # pick class with highest log probability
     best_class = None
-    best_score = None
-    for lab in priors:
-        score = math.log(priors[lab])
-        for i, val in enumerate(vec):
-            prob = counts[lab][i] / totals[lab]
-            if val > 0:
-                score += val * math.log(prob)
-        if best_score is None or score > best_score:
+    best_score = float('-inf')
+    
+    for cls in class_priors:
+        # start with log of class prior probability
+        score = math.log(class_priors[cls])
+        # add up log probabilities for each word
+        for i, freq in enumerate(feature_vec):
+            word_prob = word_counts[cls][i] / word_totals[cls]
+            if freq > 0:
+                score += freq * math.log(word_prob)
+        if score > best_score:
             best_score = score
-            best_class = lab
+            best_class = cls
+    
     return best_class
 
 
-def eval_model(features, labels, priors, counts, totals):
-    TP = FP = TN = FN = 0
-    for vec, lab in zip(features, labels):
-        guess = predict_nb(vec, priors, counts, totals)
-        if guess == 1 and lab == 1:
-            TP += 1
-        elif guess == 1 and lab == 0:
-            FP += 1
-        elif guess == 0 and lab == 0:
-            TN += 1
-        else:
-            FN += 1
-    total = len(labels) or 1
-    accuracy = (TP + TN) / total
-    precision = TP / (TP + FP) if TP + FP else 0.0
-    recall = TP / (TP + FN) if TP + FN else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    return (TP, FP, TN, FN), accuracy, precision, recall, f1
+def evaluate_model(X_test, y_test, class_priors, word_counts, word_totals):
+    # get predictions and calculate metrics
+    y_pred = [predict_spam(vec, class_priors, word_counts, word_totals) for vec in X_test]
+    
+    # confusion matrix
+    tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=[0, 1]).ravel()
+    
+    # standard metrics
+    accuracy = (tp + tn) / (tp + tn + fp + fn)
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    
+    return y_pred, (tp, fp, tn, fn), accuracy, precision, recall, f1
 
 
-def show_confusion_bars(tp, fp, tn, fn):
-    plt.figure(figsize=(5, 4))
-    plt.bar(["TP", "FP", "TN", "FN"], [tp, fp, tn, fn], color=["green", "red", "blue", "orange"])
-    plt.title("Naive Bayes Confusion Counts")
+def plot_confusion_matrix(y_true, y_pred):
+    # seaborn heatmap for confusion matrix
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=['Not Spam', 'Spam'],
+                yticklabels=['Not Spam', 'Spam'],
+                cbar_kws={'label': 'Count'})
+    plt.ylabel('Actual')
+    plt.xlabel('Predicted')
+    plt.title('Naive Bayes Email Spam Detection')
     plt.tight_layout()
     plt.show()
 
 
 if __name__ == "__main__":
-    feats, labels = load_rows()
-    (train_X, train_y), (test_X, test_y) = split_train_test(feats, labels)
-    priors, counts, totals = train_nb(train_X, train_y)
-    (TP, FP, TN, FN), acc, prec, rec, f1 = eval_model(test_X, test_y, priors, counts, totals)
-
-    print("Confusion matrix (TP, FP, TN, FN):", TP, FP, TN, FN)
-    print("Accuracy:", round(acc, 3))
-    print("Precision:", round(prec, 3))
-    print("Recall:", round(rec, 3))
-    print("F1:", round(f1, 3))
-
-    show_confusion_bars(TP, FP, TN, FN)
+    # load data
+    X, y = load_email_data()
+    (X_train, y_train), (X_test, y_test) = split_data(X, y)
+    
+    # train and predict
+    priors, counts, totals = train_naive_bayes(X_train, y_train)
+    y_pred, (tp, fp, tn, fn), acc, prec, rec, f1 = evaluate_model(
+        X_test, y_test, priors, counts, totals
+    )
+    
+    # show results
+    print("\n=== Email Spam Detection Results ===")
+    print(f"accuracy:  {acc:.3f}")
+    print(f"precision: {prec:.3f}")
+    print(f"recall:    {rec:.3f}")
+    print(f"f1-score:  {f1:.3f}")
+    print(f"\nconfusion matrix -> tp:{tp} fp:{fp} tn:{tn} fn:{fn}")
+    
+    plot_confusion_matrix(y_test, y_pred)

@@ -1,156 +1,168 @@
-"""Uber fare predictor that actually reads the csv from the repo.
-I use basic longitude/latitude jumps as features, shrink them with PCA,
-then compare mean absolute errors and throw up a scatter plot.
+"""Ride price prediction with PCA dimensionality reduction and model comparison.
+Performs EDA, implements PCA manually, trains models, compares with/without PCA.
+Supports Uber dataset and Iris dataset (classification -> regression via labels).
 """
 
 import csv
 import math
 import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.datasets import load_iris
+from sklearn.metrics import mean_squared_error, r2_score
 
 FILE_PATH = "datasets/uber_9_10.csv"
 
 
-def mean(values):
-    return sum(values) / len(values)
-
-
-def load_rows(limit=200):
+def load_dataset(dataset_type="uber", limit=200):
+    """Load Uber or Iris dataset. Returns list of ([features], target)."""
+    if dataset_type == "iris":
+        iris = load_iris()
+        X, y = iris.data[:, :2], iris.target  # Use first 2 features, target as continuous
+        return [([float(x[0]), float(x[1])], float(y_val)) for x, y_val in zip(X, y)][:limit]
+    
+    # Uber dataset
     rows = []
     with open(FILE_PATH, newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
             try:
                 fare = float(row["fare_amount"])
-                px = float(row["pickup_longitude"])
-                py = float(row["pickup_latitude"])
-                dx = float(row["dropoff_longitude"])
-                dy = float(row["dropoff_latitude"])
+                px, py = float(row["pickup_longitude"]), float(row["pickup_latitude"])
+                dx, dy = float(row["dropoff_longitude"]), float(row["dropoff_latitude"])
             except (ValueError, KeyError):
                 continue
             if fare <= 0:
                 continue
-            run = abs(dx - px)
-            rise = abs(dy - py)
-            rows.append(([run, rise], fare))
+            rows.append(([abs(dx - px), abs(dy - py)], fare))
             if len(rows) >= limit:
                 break
     return rows
 
 
 def eda_summary(rows):
+    """Print exploratory data analysis statistics."""
     fares = [fare for _, fare in rows]
     dists = [feat[0] + feat[1] for feat, _ in rows]
-    print("Trips used:", len(rows))
-    print("Avg fare:", round(mean(fares), 2))
-    print("Avg rough distance (deg):", round(mean(dists), 4))
-    print("Min/Max fare:", round(min(fares), 2), round(max(fares), 2))
+    print(f"Samples: {len(rows)} | Avg fare: {np.mean(fares):.2f} | "
+          f"Distance: {np.mean(dists):.4f} | Fare range: [{min(fares):.2f}, {max(fares):.2f}]")
 
 
 def normalize(vecs):
-    cols = list(zip(*vecs))
-    means = [mean(col) for col in cols]
-    centered = []
-    for row in vecs:
-        centered.append([row[i] - means[i] for i in range(len(row))])
-    return centered, means
+    """Center features to zero mean (manual standardization)."""
+    vecs_arr = np.array(vecs)
+    means = np.mean(vecs_arr, axis=0)
+    centered = vecs_arr - means
+    return centered.tolist(), means
 
 
 def covariance_2d(centered):
+    """Compute 2D covariance matrix elements manually."""
     xs = [row[0] for row in centered]
     ys = [row[1] for row in centered]
-    n = len(centered)
-    if n < 2:
+    n = len(centered) - 1
+    if n < 1:
         return 0.0, 0.0, 0.0
-    xx = sum(x * x for x in xs) / (n - 1)
-    yy = sum(y * y for y in ys) / (n - 1)
-    xy = sum(xs[i] * ys[i] for i in range(n)) / (n - 1)
+    xx = sum(x * x for x in xs) / n
+    yy = sum(y * y for y in ys) / n
+    xy = sum(xs[i] * ys[i] for i in range(len(xs))) / n
     return xx, xy, yy
 
 
 def principal_component(centered):
+    """Compute eigenvector for PCA (manual eigendecomposition)."""
     a, b, c = covariance_2d(centered)
-    trace = a + c
-    det = a * c - b * b
+    trace, det = a + c, a * c - b * b
     disc = max(trace * trace - 4 * det, 0)
     eig1 = (trace + math.sqrt(disc)) / 2
-    if b != 0:
-        vec = (eig1 - c, b)
-    elif a >= c:
-        vec = (1, 0)
-    else:
-        vec = (0, 1)
-    length = math.sqrt(vec[0] * vec[0] + vec[1] * vec[1]) or 1
+    vec = (eig1 - c, b) if b != 0 else ((1, 0) if a >= c else (0, 1))
+    length = math.sqrt(vec[0]**2 + vec[1]**2) or 1
     return (vec[0] / length, vec[1] / length)
 
 
 def project(centered, vec):
+    """Project data onto principal component."""
     return [[row[0] * vec[0] + row[1] * vec[1]] for row in centered]
 
 
-def gradient_descent(features, targets, steps=600, lr=0.5):
-    weights = [0.0 for _ in range(len(features[0]) + 1)]
+def gradient_descent(X, y, steps=600, lr=0.5):
+    """Manual gradient descent for linear regression."""
+    w = [0.0] * (len(X[0]) + 1)
     for _ in range(steps):
-        grad = [0.0 for _ in weights]
-        for row, y in zip(features, targets):
-            pred = weights[0]
-            for i, val in enumerate(row):
-                pred += weights[i + 1] * val
-            error = pred - y
-            grad[0] += error
-            for i, val in enumerate(row):
-                grad[i + 1] += error * val
-        m = len(features)
-        if m == 0:
-            return weights
-        for i in range(len(weights)):
-            weights[i] -= lr * grad[i] / m
-    return weights
+        g = [0.0] * len(w)
+        for x_i, y_i in zip(X, y):
+            pred = w[0] + sum(w[i+1] * x_i[i] for i in range(len(x_i)))
+            err = pred - y_i
+            g[0] += err
+            for i, val in enumerate(x_i):
+                g[i+1] += err * val
+        w = [w[i] - lr * g[i] / len(X) for i in range(len(w))]
+    return w
 
 
-def predict(weights, row):
-    out = weights[0]
-    for i, val in enumerate(row):
-        out += weights[i + 1] * val
-    return out
+def predict(w, x):
+    """Predict using trained weights."""
+    return w[0] + sum(w[i+1] * x[i] for i in range(len(x)))
 
 
-def mae(weights, features, targets):
-    if not features:
-        return 0.0
-    errors = [abs(predict(weights, row) - y) for row, y in zip(features, targets)]
-    return sum(errors) / len(errors)
-
-
-def plot_scatter(rows):
-    runs = [feat[0] for feat, _ in rows]
-    rises = [feat[1] for feat, _ in rows]
-    fares = [fare for _, fare in rows]
-    plt.figure(figsize=(6, 4))
-    plt.scatter(runs, fares, alpha=0.5, c="teal", label="longitude jump")
-    plt.scatter(rises, fares, alpha=0.5, c="orange", label="latitude jump")
-    plt.xlabel("Rough distance component (degrees)")
-    plt.ylabel("Fare ($)")
-    plt.title("Uber Fare vs Coordinate Jump")
-    plt.legend()
+def visualize_comparison(X, y, w_raw, w_pca, vec):
+    """Visualize EDA scatter and model predictions comparison."""
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    
+    # EDA scatter plot
+    X_arr = np.array(X)
+    axes[0].scatter(X_arr[:, 0], y, alpha=0.5, c="teal", label="Long diff")
+    axes[0].scatter(X_arr[:, 1], y, alpha=0.5, c="orange", label="Lat diff")
+    axes[0].set_xlabel("Distance component (deg)")
+    axes[0].set_ylabel("Fare ($)")
+    axes[0].set_title("EDA: Fare vs Features")
+    axes[0].legend()
+    
+    # Model comparison
+    centered, _ = normalize(X)
+    pred_raw = [predict(w_raw, x) for x in centered]
+    reduced = project(centered, vec)
+    pred_pca = [predict(w_pca, x) for x in reduced]
+    
+    axes[1].scatter(range(len(y)), y, alpha=0.5, label="Actual", c="gray")
+    axes[1].plot(pred_raw, label="Raw features", linestyle="--", linewidth=2)
+    axes[1].plot(pred_pca, label="PCA features", linestyle="--", linewidth=2)
+    axes[1].set_xlabel("Sample")
+    axes[1].set_ylabel("Fare ($)")
+    axes[1].set_title("Model Predictions Comparison")
+    axes[1].legend()
+    
     plt.tight_layout()
     plt.show()
 
 
 if __name__ == "__main__":
-    dataset = load_rows()
+    # Load dataset (change "uber" to "iris" to use Iris dataset)
+    dataset = load_dataset(dataset_type="uber", limit=200)
+    
+    # EDA
     eda_summary(dataset)
-    plot_scatter(dataset)
-
+    
+    # Extract features and targets
     X = [feat for feat, _ in dataset]
     y = [fare for _, fare in dataset]
+    
+    # Raw model: train on original features
     centered, _ = normalize(X)
-    raw_weights = gradient_descent(centered, y)
-    raw_mae = mae(raw_weights, centered, y)
-
+    w_raw = gradient_descent(centered, y)
+    pred_raw = [predict(w_raw, x) for x in centered]
+    mse_raw, r2_raw = mean_squared_error(y, pred_raw), r2_score(y, pred_raw)
+    
+    # PCA model: train on reduced features
     vec = principal_component(centered)
     reduced = project(centered, vec)
-    reduced_weights = gradient_descent(reduced, y)
-    reduced_mae = mae(reduced_weights, reduced, y)
-
-    print("Raw feature MAE:", round(raw_mae, 3))
-    print("PCA feature MAE:", round(reduced_mae, 3))
+    w_pca = gradient_descent(reduced, y)
+    pred_pca = [predict(w_pca, x) for x in reduced]
+    mse_pca, r2_pca = mean_squared_error(y, pred_pca), r2_score(y, pred_pca)
+    
+    # Results
+    print(f"\n{'='*50}")
+    print(f"{'Raw Features (2D)':<25} MSE: {mse_raw:.4f} | R²: {r2_raw:.4f}")
+    print(f"{'PCA Features (1D)':<25} MSE: {mse_pca:.4f} | R²: {r2_pca:.4f}")
+    print(f"{'='*50}")
+    
+    visualize_comparison(X, y, w_raw, w_pca, vec)
